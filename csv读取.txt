@@ -1,0 +1,100 @@
+前端
+mport streamlit as st
+import pandas as pd
+from utils import dataframe_agent
+
+def create_chart(input_data, chart_type):
+    df_data = pd.DataFrame(input_data["data"], columns=input_data["columns"])
+    df_data.set_index(input_data["columns"][0], inplace=True)
+    if chart_type == "bar":
+        st.bar_chart(df_data)
+    elif chart_type == "line":
+        st.line_chart(df_data)
+    elif chart_type == "scatter":
+        st.scatter_chart(df_data)
+
+
+st.title("💡 csv数据分析智能工具")
+with st.sidebar:
+    openai_api_key = st.text_input("请输入OpenAI API密钥: ", type="password")
+    st.markdown('[获取OpenAI API KEY](https://bailian.console.aliyun.com/)')
+
+data = st.file_uploader("上传你的数据格式(csv格式): ", type="csv")
+if data:
+    st.session_state["df"] = pd.read_csv(data)
+    with st.expander("原始数据"):
+        st.dataframe(st.session_state["df"])
+
+query = st.text_area("请输入你关于以上表格的问题，或数据提取请求，"
+                     "或可视化要求(支持散点图、折线图、条形图): ")
+button = st.button("生成回答")
+
+if button and not openai_api_key:
+    st.info("请输入密钥")
+if button and "df" not in st.session_state:
+    st.info("请先上传数据文件")
+if button and openai_api_key and "df" in st.session_state:
+    with st.spinner("AI 正在思考中，请稍后..."):
+        response_dict = dataframe_agent(openai_api_key, st.session_state["df"], query)
+        if "answer" in response_dict:
+            st.write(response_dict["answer"])
+        if "table" in response_dict:
+            st.table(pd.DataFrame(response_dict["table"]["data"],
+                     columns=response_dict["table"]["columns"]))
+        if "bar" in response_dict:
+            create_chart(response_dict["bar"], "bar")
+        if "line" in response_dict:
+            create_chart(response_dict["line"], "line")
+        if "scatter" in response_dict:
+            create_chart(response_dict["scatter"], "scatter")
+
+后端
+import json
+from langchain_openai import ChatOpenAI
+from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
+
+PROMPT_TEMPLATE = """
+你是一位数据分析助手，你的回应内容取决于用户的请求内容。
+
+1. 对于文字回答的问题，按照这样的格式回答：
+   {"answer": "&lt;你的答案写在这里&gt;"}
+例如：
+   {"answer": "订单量最高的产品ID是'MNWC3-067'"}
+
+2. 如果用户需要一个表格，按照这样的格式回答：
+   {"table": {"columns": ["column1", "column2", ...], "data": [[value1, value2, ...], [value1, value2, ...], ...]}}
+
+3. 如果用户的请求适合返回条形图，按照这样的格式回答：
+   {"bar": {"columns": ["A", "B", "C", ...], "data": [34, 21, 91, ...]}}
+
+4. 如果用户的请求适合返回折线图，按照这样的格式回答：
+   {"line": {"columns": ["A", "B", "C", ...], "data": [34, 21, 91, ...]}}
+
+5. 如果用户的请求适合返回散点图，按照这样的格式回答：
+   {"scatter": {"columns": ["A", "B", "C", ...], "data": [34, 21, 91, ...]}}
+注意：我们只支持三种类型的图表："bar", "line" 和 "scatter"。
+
+
+请将所有输出作为JSON字符串返回。请注意要将"columns"列表和数据列表中的所有字符串都用双引号包围。
+例如：{"columns": ["Products", "Orders"], "data": [["32085Lip", 245], ["76439Eye", 178]]}
+
+你要处理的用户请求如下： 
+"""
+
+
+def dataframe_agent(openai_api_key, df, query):
+    model = ChatOpenAI(
+        openai_api_key=openai_api_key,
+        temperature=0,
+        model="qwen-max",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    agent = create_pandas_dataframe_agent(llm=model,
+                                          df=df,
+                                          agent_executor_kwargs={"handle_parsing_errors": True},
+                                          verbose=True,
+                                          allow_dangerous_code=True)
+    prompt = PROMPT_TEMPLATE + query
+    response = agent.invoke({"input": prompt})
+    response_dict = json.loads(response["output"])
+    return response_dict
