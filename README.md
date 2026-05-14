@@ -1,2 +1,2 @@
 # cloned_chatgpt
-一个简易版的chatgpt
+一系列AI相关工具
